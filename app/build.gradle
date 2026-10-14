@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.oceantech.nourcontroller'
+    namespace 'io.github.jeanthomaz.discusfishcontrol'
     compileSdk 36
 
     defaultConfig {
-        applicationId 'com.oceantech.nourcontroller'
+        applicationId 'io.github.jeanthomaz.discusfishcontrol'
         minSdk 23
         targetSdk 36
         versionCode 9

@@ -1,4 +1,4 @@
-package com.oceantech.nourcontroller;
+package io.github.jeanthomaz.discusfishcontrol;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
