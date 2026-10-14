@@ -44,7 +44,7 @@ The project uses Java and Android Gradle Plugin 8.13.2.
 
 This is an independent community project based on BLE behavior and commands observed in OceanTech's older Android app. Version 0.9.2 is a development build. The earlier app version was confirmed to connect to and control the maintainer's lamp. The removal frames, dawn/dusk commands, window validation, and Bluetooth completion/failure paths passed 74 host-side checks, and the Java sources compile against Android SDK 36. The updated UI and actual lamp behavior still need validation on hardware.
 
-See the repository's **Releases** page for release notes and downloadable builds when available.
+See the repository's [Releases page](https://github.com/jeanthomaz/DiscusFishControl/releases) for release notes and downloadable builds when available.
 
 ## License
 
