@@ -1,0 +1,16 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.oceantech.nourcontroller'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.oceantech.nourcontroller'
+        minSdk 23
+        targetSdk 35
+        versionCode 8
+        versionName '0.8.0'
+    }
+}
