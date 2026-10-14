@@ -1,34 +1,42 @@
-# Acará Controle (protótipo 0.8.0)
+# Discus Fish Control / Acará Controle
 
-App Android nativo para controlar e investigar lâmpadas OceanTech Nour, desenvolvido a partir dos comandos observados no APK 1.0.8 fornecido pelo usuário.
+An Android app for controlling OceanTech NOUR aquarium lights over Bluetooth Low Energy (BLE). The app is named **Discus Fish Control** in English and **Acará Controle** in Brazilian Portuguese.
 
-## Recursos
+Choose English or Brazilian Portuguese from the language button in the app header. The selection is saved on the device.
 
-- Seletor dos cinco modelos exibidos pelo app antigo; inicia em **NOUR freshwater**.
-- Busca de dispositivos BLE, conexão e confirmação inicial `xd_ble_flagpass001`.
-- Filtro de busca pelo padrão OceanTech `TO-L-` seguido por quatro caracteres, igual ao filtro de nomes do APK antigo.
-- Leitura do estado atual pela característica `AE10`, incluindo estado ligado/desligado, modo automático/manual e intensidades dos canais.
-- Controles de energia e modo, com os comandos `app_pwm_on...` identificados no APK.
-- Controles manuais Branco, Azul, Verde e Vermelho; envio explícito com `rtvall00` e valores de três dígitos.
-- Leitura e gravação dos sete dias de repetição semanal pela característica `AE03`, usando `app_week_data` e `app_set_pwm_fre750`.
-- Sincronização do relógio usando o formato `RTCSET` do app antigo.
-- Editor de um dos oito horários automáticos, com liga/desliga, hora e níveis dos quatro canais, usando o comando `w_a_d` recuperado do editor do APK.
-- Aba dedicada à programação inspirada no fluxo do app original: o gráfico mostra as mudanças ao longo do dia; um seletor em ordem cronológica escolhe um horário de cada vez para edição. O editor reúne estado ligado/desligado, hora, quatro intensidades e salvamento.
-- Impede salvar dois pontos ativos no mesmo horário; horários repetidos já gravados são sinalizados para correção.
-- Ícone vetorial original inspirado no acará-disco.
-- Interface reorganizada em cartões, com descoberta de dispositivos separada dos controles e painéis de controle exibidos após a leitura inicial da lâmpada. A barra de status do Android respeita as áreas seguras e recortes do dispositivo.
+## Features
 
-As gravações usam tramas ASCII de 20 bytes, como no APK. Os controles de canal continuam limitados ao modo manual.
+- Find nearby OceanTech lamps and connect over BLE.
+- Control power and switch between automatic and manual modes.
+- Adjust white, blue, green, and red channels in manual mode.
+- View the daily light schedule as a four-channel graph and an ordered visual timeline.
+- Add up to ten schedule points, see each point’s channel levels at a glance, and edit its time and intensity.
+- Preview edits on the graph, avoid duplicate active times, and save each point to the lamp.
+- Switch the app between English and Brazilian Portuguese; the choice is remembered.
+- Configure weekly schedule days and synchronize the lamp clock.
+- Filter scan results to the OceanTech device name pattern `TO-L-XXXX`.
 
-## Abrir e gerar APK
+## Compatibility
 
-Abra esta pasta no Android Studio recente, instale Android SDK Platform 36 quando solicitado e deixe o IDE sincronizar o Gradle. Use **Build > Build APK(s)**. O projeto usa Java e não exige instalar uma linguagem separada; o Android Studio inclui a cadeia de build necessária.
+- Android 6.0 (API 23) or later.
+- OceanTech NOUR BLE aquarium lights. The selected model defaults to **NOUR freshwater**.
+- Bluetooth permissions are required. Android may also request nearby-device or location permission depending on its version.
 
-Requisitos declarados: Android Gradle Plugin 8.13.2, Gradle 8.13, JDK 17 ou superior e Android SDK 36.
+## Build
 
-## Observações
+1. Open this project directory in Android Studio.
+2. Install Android SDK Platform 36 when prompted and use JDK 17 or later.
+3. Allow Gradle sync to finish.
+4. Select **Build > Build APK(s)** to create a debug APK.
 
-- As linhas do gráfico ligam os pontos configurados como uma prévia visual; a luminária pode aplicar transições próprias entre horários.
-- As predefinições de brilho (`AE12`) ainda precisam de leitura e validação.
-- O app antigo recebeu resposta da lâmpada no fluxo de leitura semanal; este projeto lê `AE03` quando ela é anunciada como legível. Se não aparecer, os controles semanais ficam desabilitados.
-- A edição 0.8.0 precisa ser instalada e validada na lâmpada real. A compilação Java foi conferida; o filtro, a leitura do gráfico, a prevenção de horários repetidos e os recuos de tela precisam de validação no aparelho.
+The project uses Java and Android Gradle Plugin 8.13.2.
+
+## Project status
+
+This is an independent community project based on BLE behavior and commands observed in OceanTech's older Android app. Version 0.9.0 is a development build. The earlier app version was confirmed to connect to and control the maintainer's lamp. The new schedule editor and language selection compile, but still need validation on hardware.
+
+See the repository's **Releases** page for release notes and downloadable builds when available.
+
+## License
+
+No license has been selected yet. Until one is added, the source is not granted an open-source license.

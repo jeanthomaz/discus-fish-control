@@ -1,7 +1,9 @@
 package com.oceantech.nourcontroller;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.TimePickerDialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -18,6 +20,7 @@ import android.bluetooth.le.ScanResult;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -54,6 +57,8 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.UUID;
 
+@SuppressLint("SetTextI18n") // UI strings are localized through tr() at runtime.
+@SuppressWarnings("deprecation") // Legacy system-bar APIs support Android 6 through 10.
 public class MainActivity extends Activity {
     private static final int REQUEST_BLE_PERMISSIONS = 41;
     private static final int REQUEST_ENABLE_BLUETOOTH = 42;
@@ -67,7 +72,8 @@ public class MainActivity extends Activity {
             "NOUR Plus freshwater", "NOUR Plus marine", "NOUR freshwater",
             "NOUR marine", "NOUR pure white"
     };
-    private static final String[] CHANNELS = {"Branco", "Azul", "Verde", "Vermelho"};
+    private static final String PREFS_NAME = "discus-fish-control";
+    private static final String PREF_LANGUAGE = "app-language";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, BluetoothDevice> foundDevices = new LinkedHashMap<>();
@@ -99,6 +105,7 @@ public class MainActivity extends Activity {
     private LinearLayout tabsRow;
     private LinearLayout devicesContainer;
     private TextView devicesLabel;
+    private TextView scheduleEmptyView;
     private TextView statusView;
     private Button scanButton;
     private Button sendButton;
@@ -108,13 +115,17 @@ public class MainActivity extends Activity {
     private Button clockButton;
     private Button controlTabButton;
     private Button programTabButton;
+    private Button languageButton;
     private Button scheduleTimeButton;
     private Button saveScheduleButton;
-    private Spinner scheduleSpinner;
-    private ArrayAdapter<String> scheduleAdapter;
-    private final int[] scheduleSpinnerSlots = new int[8];
+    private Button addScheduleButton;
     private android.widget.Switch scheduleEnabledSwitch;
     private LinearLayout scheduleEditorPanel;
+    private LinearLayout scheduleTimeline;
+    private final LinearLayout[] scheduleSlotCards = new LinearLayout[10];
+    private final TextView[] scheduleSlotTimeLabels = new TextView[10];
+    private final TextView[] scheduleSlotStateLabels = new TextView[10];
+    private final MiniLevelsView[] scheduleSlotLevels = new MiniLevelsView[10];
     private TextView scheduleEditTitleView;
     private TextView scheduleConflictView;
     private int scheduleHour = 12;
@@ -127,20 +138,32 @@ public class MainActivity extends Activity {
     private final SchedulePoint[] schedulePoints = new SchedulePoint[10];
     private LightGraphView lightGraph;
     private int alarmReadsCompleted;
-    private int activeScheduleSlot;
+    private int activeScheduleSlot = -1;
     private boolean programmingTabSelected;
     private boolean loadingSchedulePoint;
     private boolean scheduleDataLoaded;
-    private boolean refreshingScheduleOptions;
+    private String appLanguage = "pt-BR";
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        String language = base.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(PREF_LANGUAGE, "pt-BR");
+        Locale locale = language.equals("en") ? Locale.ENGLISH : new Locale("pt", "BR");
+        Locale.setDefault(locale);
+        Configuration configuration = new Configuration(base.getResources().getConfiguration());
+        configuration.setLocale(locale);
+        super.attachBaseContext(base.createConfigurationContext(configuration));
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        appLanguage = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_LANGUAGE, "pt-BR");
         BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
         bluetoothAdapter = manager == null ? null : manager.getAdapter();
         buildScreen();
         configureSystemBars();
-        setStatus("Escolha o modelo e busque sua luminária OceanTech.");
+        setStatus(tr("Escolha o modelo e busque sua luminária OceanTech.", "Choose the lamp model and search for your OceanTech light."));
     }
 
     private void buildScreen() {
@@ -163,21 +186,27 @@ public class MainActivity extends Activity {
         LinearLayout heading = new LinearLayout(this);
         heading.setOrientation(LinearLayout.VERTICAL);
         heading.setPadding(dp(12), 0, 0, 0);
-        TextView title = label("Acará Controle");
+        TextView title = label(getString(R.string.app_name));
         title.setTextSize(24);
         TextView subtitle = new TextView(this);
-        subtitle.setText("Controle da sua luminária");
+        subtitle.setText(tr("Controle da sua luminária", "Control your aquarium light"));
         subtitle.setTextSize(14);
         subtitle.setTextColor(Color.rgb(91, 111, 115));
         heading.addView(title);
         heading.addView(subtitle, topMargin(2));
-        header.addView(heading);
+        header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        languageButton = new Button(this);
+        languageButton.setText(appLanguage.equals("en") ? "EN" : "PT-BR");
+        languageButton.setContentDescription(tr("Idioma do aplicativo", "App language"));
+        languageButton.setOnClickListener(v -> chooseLanguage());
+        styleButton(languageButton, false);
+        header.addView(languageButton, new LinearLayout.LayoutParams(-2, dp(44)));
         root.addView(header, topMargin(4));
 
         LinearLayout connectionCard = card();
         root.addView(connectionCard, topMargin(20));
-        connectionCard.addView(sectionTitle("Conexão"));
-        TextView modelLabel = helperText("Modelo da lâmpada");
+        connectionCard.addView(sectionTitle(tr("Conexão", "Connection")));
+        TextView modelLabel = helperText(tr("Modelo da lâmpada", "Lamp model"));
         connectionCard.addView(modelLabel, topMargin(12));
         Spinner modelSpinner = new Spinner(this);
         ArrayAdapter<String> modelAdapter = new ArrayAdapter<>(this,
@@ -186,7 +215,7 @@ public class MainActivity extends Activity {
         modelSpinner.setAdapter(modelAdapter);
         modelSpinner.setSelection(2);
         connectionCard.addView(modelSpinner, topMargin(2));
-        connectionCard.addView(helperText("A busca mostra luminárias identificadas como TO-L-XXXX."), topMargin(2));
+        connectionCard.addView(helperText(tr("A busca mostra luminárias identificadas como TO-L-XXXX.", "Search finds lights identified as TO-L-XXXX.")), topMargin(2));
 
         statusView = new TextView(this);
         statusView.setTextSize(14);
@@ -196,12 +225,12 @@ public class MainActivity extends Activity {
         connectionCard.addView(statusView, topMargin(14));
 
         scanButton = new Button(this);
-        scanButton.setText("Buscar luminária");
+        scanButton.setText(tr("Buscar luminária", "Search for lamp"));
         styleButton(scanButton, true);
         scanButton.setOnClickListener(v -> startScanFlow());
         connectionCard.addView(scanButton, topMargin(10));
 
-        devicesLabel = helperText("Dispositivos próximos");
+        devicesLabel = helperText(tr("Dispositivos próximos", "Nearby devices"));
         devicesLabel.setVisibility(android.view.View.GONE);
         devicesContainer = new LinearLayout(this);
         devicesContainer.setOrientation(LinearLayout.VERTICAL);
@@ -213,11 +242,11 @@ public class MainActivity extends Activity {
         tabsRow.setPadding(0, dp(4), 0, dp(2));
         tabsRow.setVisibility(android.view.View.GONE);
         controlTabButton = new Button(this);
-        controlTabButton.setText("Controle");
+        controlTabButton.setText(tr("Controle", "Control"));
         styleButton(controlTabButton, true);
         controlTabButton.setOnClickListener(v -> showProgrammingTab(false));
         programTabButton = new Button(this);
-        programTabButton.setText("Programação");
+        programTabButton.setText(tr("Programação", "Schedule"));
         styleButton(programTabButton, false);
         programTabButton.setOnClickListener(v -> showProgrammingTab(true));
         tabsRow.addView(controlTabButton, new LinearLayout.LayoutParams(0, -2, 1));
@@ -229,35 +258,35 @@ public class MainActivity extends Activity {
         controlsCard = card();
         controlsCard.setVisibility(android.view.View.GONE);
         root.addView(controlsCard, topMargin(14));
-        controlsCard.addView(sectionTitle("Luminária"));
+        controlsCard.addView(sectionTitle(tr("Luminária", "Lamp")));
         modeButton = new Button(this);
-        modeButton.setText("Aguardando leitura da luminária");
+        modeButton.setText(tr("Aguardando leitura da luminária", "Waiting for lamp status"));
         modeButton.setEnabled(false);
         modeButton.setOnClickListener(v -> toggleMode());
         styleButton(modeButton, false);
         controlsCard.addView(modeButton, topMargin(12));
 
         powerButton = new Button(this);
-        powerButton.setText("Ligar ou desligar");
+        powerButton.setText(tr("Ligar ou desligar", "Turn on or off"));
         powerButton.setEnabled(false);
         powerButton.setOnClickListener(v -> togglePower());
         styleButton(powerButton, false);
         controlsCard.addView(powerButton, topMargin(4));
 
-        controlsCard.addView(sectionTitle("Canais de cor"), topMargin(20));
-        TextView channelHint = helperText("Ajuste os níveis e envie no modo manual.");
+        controlsCard.addView(sectionTitle(tr("Canais de cor", "Color channels")), topMargin(20));
+        TextView channelHint = helperText(tr("Ajuste os níveis e envie no modo manual.", "Adjust the levels and send them in manual mode."));
         controlsCard.addView(channelHint, topMargin(2));
-        for (int i = 0; i < CHANNELS.length; i++) addChannelControl(i);
+        for (int i = 0; i < 4; i++) addChannelControl(i);
 
         sendButton = new Button(this);
-        sendButton.setText("Aplicar níveis");
+        sendButton.setText(tr("Aplicar níveis", "Apply levels"));
         sendButton.setEnabled(false);
         sendButton.setOnClickListener(v -> sendChannelLevels());
         styleButton(sendButton, true);
         controlsCard.addView(sendButton, topMargin(8));
 
         Button disconnectButton = new Button(this);
-        disconnectButton.setText("Desconectar");
+        disconnectButton.setText(tr("Desconectar", "Disconnect"));
         disconnectButton.setOnClickListener(v -> disconnect());
         styleButton(disconnectButton, false);
         controlsCard.addView(disconnectButton, topMargin(4));
@@ -268,10 +297,11 @@ public class MainActivity extends Activity {
         root.addView(programmingPanel, topMargin(14));
 
         weeklyCard = card();
-        weeklyCard.addView(sectionTitle("Repetição semanal"));
-        weeklyCard.addView(helperText("Escolha em quais dias a rotina se repete."), topMargin(2));
-        String[] dayNames = {"Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira",
-                "Quinta-feira", "Sexta-feira", "Sábado"};
+        weeklyCard.addView(sectionTitle(tr("Repetição semanal", "Weekly repeat")));
+        weeklyCard.addView(helperText(tr("Escolha em quais dias a rotina se repete.", "Choose which days the routine repeats.")), topMargin(2));
+        String[] dayNames = appLanguage.equals("en")
+                ? new String[]{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+                : new String[]{"Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"};
         for (int i = 0; i < weekDays.length; i++) {
             CheckBox checkBox = new CheckBox(this);
             checkBox.setText(dayNames[i]);
@@ -282,14 +312,14 @@ public class MainActivity extends Activity {
             weeklyCard.addView(checkBox, topMargin(0));
         }
         saveWeekButton = new Button(this);
-        saveWeekButton.setText("Salvar repetição");
+        saveWeekButton.setText(tr("Salvar repetição", "Save weekly repeat"));
         saveWeekButton.setEnabled(false);
         saveWeekButton.setOnClickListener(v -> saveWeekDays());
         styleButton(saveWeekButton, true);
         weeklyCard.addView(saveWeekButton, topMargin(8));
 
         clockButton = new Button(this);
-        clockButton.setText("Sincronizar relógio");
+        clockButton.setText(tr("Sincronizar relógio", "Sync clock"));
         clockButton.setEnabled(false);
         clockButton.setOnClickListener(v -> syncLampClock());
         styleButton(clockButton, false);
@@ -297,49 +327,53 @@ public class MainActivity extends Activity {
 
         scheduleCard = card();
         programmingPanel.addView(scheduleCard, topMargin(14));
-        scheduleCard.addView(sectionTitle("Programação por horário"));
+        scheduleCard.addView(sectionTitle(tr("Programação por horário", "Daily light schedule")));
         TextView scheduleHint = new TextView(this);
-        scheduleHint.setText("Cada ponto é uma mudança de intensidade. As linhas mostram como as cores variam ao longo do dia.");
+        scheduleHint.setText(tr("Cada ponto é uma mudança de intensidade. As linhas mostram como as cores variam ao longo do dia.", "Each point changes the light intensity. The lines show how each color changes during the day."));
         scheduleHint.setTextSize(13);
         scheduleHint.setTextColor(Color.rgb(65, 83, 88));
         scheduleCard.addView(scheduleHint, topMargin(3));
         lightGraph = new LightGraphView(this);
         scheduleCard.addView(lightGraph, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(230)));
-        scheduleCard.addView(helperText("Toque em uma mudança no gráfico para editar. Você também pode escolher o horário abaixo."), topMargin(8));
-        scheduleCard.addView(sectionTitle("Horário para editar"), topMargin(12));
-        scheduleSpinner = new Spinner(this);
-        scheduleAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>());
-        scheduleAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        scheduleSpinner.setAdapter(scheduleAdapter);
-        scheduleSpinner.setEnabled(false);
-        scheduleSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(android.widget.AdapterView<?> parent, android.view.View view,
-                                                int position, long id) {
-                if (!refreshingScheduleOptions && position >= 0 && position < 8) {
-                    selectSchedulePoint(scheduleSpinnerSlots[position]);
-                }
-            }
-            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
-        });
-        scheduleCard.addView(scheduleSpinner, topMargin(2));
-        scheduleEditTitleView = sectionTitle("Configurar horário");
+        scheduleCard.addView(helperText(tr("Toque em um horário para editar. A curva mostra a mudança de intensidade ao longo do dia.", "Tap a time to edit it. The chart shows how light intensity changes during the day.")), topMargin(8));
+        LinearLayout timelineHeader = new LinearLayout(this);
+        timelineHeader.setGravity(Gravity.CENTER_VERTICAL);
+        TextView timelineTitle = sectionTitle(tr("Horários do dia", "Daily schedule"));
+        timelineHeader.addView(timelineTitle, new LinearLayout.LayoutParams(0, -2, 1));
+        addScheduleButton = new Button(this);
+        addScheduleButton.setText(tr("+ Adicionar horário", "+ Add time"));
+        addScheduleButton.setOnClickListener(v -> addSchedulePoint());
+        styleButton(addScheduleButton, true);
+        timelineHeader.addView(addScheduleButton, new LinearLayout.LayoutParams(-2, dp(44)));
+        scheduleCard.addView(timelineHeader, topMargin(14));
+        scheduleEmptyView = helperText(tr("Nenhum horário configurado. Adicione o primeiro ponto para desenhar a rotina de luz.", "No times set. Add the first point to build your light routine."));
+        scheduleCard.addView(scheduleEmptyView, topMargin(4));
+        scheduleTimeline = new LinearLayout(this);
+        scheduleTimeline.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < schedulePoints.length; i++) {
+            scheduleSlotCards[i] = createScheduleSlotCard(i);
+            scheduleSlotCards[i].setVisibility(android.view.View.GONE);
+        }
+        scheduleCard.addView(scheduleTimeline);
+        scheduleEditTitleView = sectionTitle(tr("Selecione ou adicione um horário", "Select or add a time"));
         scheduleEditorPanel = card();
         scheduleEditorPanel.setBackground(rounded(Color.rgb(247, 250, 250), Color.rgb(232, 239, 239), 14));
+        scheduleEditorPanel.setVisibility(android.view.View.GONE);
         scheduleEditorPanel.addView(scheduleEditTitleView);
-        scheduleEditorPanel.addView(helperText("Edite um horário por vez, como na programação da luminária."), topMargin(2));
+        scheduleEditorPanel.addView(helperText(tr("Escolha quando esta mudança acontece e ajuste cada canal.", "Choose when this change happens and set each color channel.")), topMargin(2));
         scheduleConflictView = helperText("");
         scheduleConflictView.setTextColor(Color.rgb(166, 57, 43));
         scheduleConflictView.setVisibility(android.view.View.GONE);
         scheduleEditorPanel.addView(scheduleConflictView, topMargin(4));
         scheduleTimeButton = new Button(this);
-        scheduleTimeButton.setText("Escolher horário · 12:00");
+        scheduleTimeButton.setText(tr("Escolher horário · 12:00", "Choose time · 12:00"));
         scheduleTimeButton.setEnabled(false);
         scheduleTimeButton.setOnClickListener(v -> chooseScheduleTime());
         styleButton(scheduleTimeButton, false);
         scheduleEditorPanel.addView(scheduleTimeButton, topMargin(8));
         scheduleEnabledSwitch = new android.widget.Switch(this);
-        scheduleEnabledSwitch.setText("Ativar mudança de luz neste horário");
+        scheduleEnabledSwitch.setText(tr("Ativar mudança de luz neste horário", "Enable this light change"));
         scheduleEnabledSwitch.setChecked(true);
         scheduleEnabledSwitch.setEnabled(false);
         scheduleEnabledSwitch.setButtonTintList(ColorStateList.valueOf(Color.rgb(8, 127, 140)));
@@ -347,10 +381,10 @@ public class MainActivity extends Activity {
             if (!loadingSchedulePoint) updateScheduleGraphPreview();
         });
         scheduleEditorPanel.addView(scheduleEnabledSwitch, topMargin(4));
-        scheduleEditorPanel.addView(helperText("Intensidade das cores"), topMargin(8));
-        for (int i = 0; i < CHANNELS.length; i++) addScheduleChannelControl(i);
+        scheduleEditorPanel.addView(helperText(tr("Intensidade das cores", "Color intensity")), topMargin(8));
+        for (int i = 0; i < 4; i++) addScheduleChannelControl(i);
         saveScheduleButton = new Button(this);
-        saveScheduleButton.setText("Salvar horário");
+        saveScheduleButton.setText(tr("Salvar horário", "Save time"));
         saveScheduleButton.setEnabled(false);
         saveScheduleButton.setOnClickListener(v -> saveSchedule());
         styleButton(saveScheduleButton, true);
@@ -358,11 +392,6 @@ public class MainActivity extends Activity {
         scheduleCard.addView(scheduleEditorPanel, topMargin(12));
         programmingPanel.addView(weeklyCard, topMargin(14));
 
-        TextView note = new TextView(this);
-        note.setText("Os comandos e horários estão sendo adaptados do protocolo do app original.");
-        note.setTextSize(12);
-        note.setTextColor(Color.rgb(102, 119, 122));
-        root.addView(note, topMargin(14));
     }
 
     private void configureSystemBars() {
@@ -377,11 +406,11 @@ public class MainActivity extends Activity {
             window.setStatusBarColor(safeAreaColor);
             window.setNavigationBarColor(safeAreaColor);
             window.setDecorFitsSystemWindows(false);
-            if (Build.VERSION.SDK_INT >= 29) window.setNavigationBarContrastEnforced(false);
+            window.setNavigationBarContrastEnforced(false);
             decor.setOnApplyWindowInsetsListener((view, insets) -> {
                 android.graphics.Insets bars = insets.getInsets(
                         WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-            scrollContainer.setPadding(0, bars.top, 0, bars.bottom);
+                scrollContainer.setPadding(0, bars.top, 0, bars.bottom);
                 return insets;
             });
             decor.requestApplyInsets();
@@ -389,6 +418,140 @@ public class MainActivity extends Activity {
             window.setStatusBarColor(safeAreaColor);
             window.setNavigationBarColor(safeAreaColor);
         }
+    }
+
+    private String tr(String portuguese, String english) {
+        return appLanguage.equals("en") ? english : portuguese;
+    }
+
+    private String[] channelNames() {
+        return appLanguage.equals("en")
+                ? new String[]{"White", "Blue", "Green", "Red"}
+                : new String[]{"Branco", "Azul", "Verde", "Vermelho"};
+    }
+
+    private void chooseLanguage() {
+        String[] options = {"English", "Português (Brasil)"};
+        int selected = appLanguage.equals("en") ? 0 : 1;
+        new AlertDialog.Builder(this)
+                .setTitle(tr("Idioma do aplicativo", "App language"))
+                .setSingleChoiceItems(options, selected, (dialog, which) -> {
+                    String nextLanguage = which == 0 ? "en" : "pt-BR";
+                    dialog.dismiss();
+                    if (nextLanguage.equals(appLanguage)) return;
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                            .putString(PREF_LANGUAGE, nextLanguage).apply();
+                    recreate();
+                })
+                .setNegativeButton(tr("Cancelar", "Cancel"), null)
+                .show();
+    }
+
+    private LinearLayout createScheduleSlotCard(int slot) {
+        LinearLayout eventCard = new LinearLayout(this);
+        eventCard.setOrientation(LinearLayout.HORIZONTAL);
+        eventCard.setGravity(Gravity.CENTER_VERTICAL);
+        eventCard.setPadding(dp(12), dp(8), dp(12), dp(8));
+        eventCard.setBackground(rounded(Color.WHITE, Color.rgb(225, 234, 235), 14));
+        eventCard.setClickable(true);
+        eventCard.setFocusable(true);
+        eventCard.setOnClickListener(v -> selectSchedulePoint(slot));
+
+        LinearLayout timeColumn = new LinearLayout(this);
+        timeColumn.setOrientation(LinearLayout.VERTICAL);
+        timeColumn.setGravity(Gravity.CENTER_VERTICAL);
+        scheduleSlotTimeLabels[slot] = label("--:--");
+        scheduleSlotTimeLabels[slot].setTextSize(18);
+        scheduleSlotStateLabels[slot] = helperText(tr("Ativo", "Active"));
+        timeColumn.addView(scheduleSlotTimeLabels[slot]);
+        timeColumn.addView(scheduleSlotStateLabels[slot], topMargin(1));
+        eventCard.addView(timeColumn, new LinearLayout.LayoutParams(dp(96), -2));
+
+        scheduleSlotLevels[slot] = new MiniLevelsView(this);
+        LinearLayout.LayoutParams levelsParams = new LinearLayout.LayoutParams(0, dp(54), 1);
+        levelsParams.leftMargin = dp(8);
+        eventCard.addView(scheduleSlotLevels[slot], levelsParams);
+        return eventCard;
+    }
+
+    private void refreshScheduleTimeline(boolean reorder) {
+        if (scheduleTimeline == null) return;
+        ArrayList<Integer> slots = new ArrayList<>();
+        for (int i = 0; i < schedulePoints.length; i++) {
+            SchedulePoint point = schedulePoints[i];
+            LinearLayout card = scheduleSlotCards[i];
+            if (point == null) {
+                card.setVisibility(android.view.View.GONE);
+                continue;
+            }
+            card.setVisibility(android.view.View.VISIBLE);
+            slots.add(i);
+            scheduleSlotTimeLabels[i].setText(twoDigits(point.hour) + ":" + twoDigits(point.minute));
+            String state = point.enabled ? tr("Ativo", "Active") : tr("Pausado", "Paused");
+            if (!point.saved) state += "  ·  " + tr("Não salvo", "Unsaved");
+            if (point.enabled && hasScheduleConflict(i)) state += "  ·  " + tr("Revisar", "Review");
+            scheduleSlotStateLabels[i].setText(state);
+            scheduleSlotLevels[i].setLevels(point.levels);
+            boolean selected = i == activeScheduleSlot;
+            card.setBackground(rounded(selected ? Color.rgb(229, 247, 245) : Color.WHITE,
+                    selected ? Color.rgb(8, 127, 140) : Color.rgb(225, 234, 235), 14));
+        }
+        Collections.sort(slots, (a, b) -> {
+            SchedulePoint first = schedulePoints[a];
+            SchedulePoint second = schedulePoints[b];
+            return Integer.compare(first.hour * 60 + first.minute, second.hour * 60 + second.minute);
+        });
+        if (reorder) {
+            scheduleTimeline.removeAllViews();
+            for (int index = 0; index < slots.size(); index++) {
+                int slot = slots.get(index);
+                scheduleTimeline.addView(scheduleSlotCards[slot], topMargin(index == 0 ? 6 : 4));
+            }
+        }
+        scheduleEmptyView.setVisibility(slots.isEmpty() ? android.view.View.VISIBLE : android.view.View.GONE);
+        if (addScheduleButton != null) {
+            addScheduleButton.setEnabled(connectedReady && scheduleDataLoaded && slots.size() < schedulePoints.length);
+        }
+    }
+
+    private void addSchedulePoint() {
+        if (!connectedReady || !scheduleDataLoaded) return;
+        int slot = -1;
+        for (int i = 0; i < schedulePoints.length; i++) if (schedulePoints[i] == null) { slot = i; break; }
+        if (slot < 0) {
+            Toast.makeText(this, tr("A luminária já tem dez horários configurados.",
+                    "The lamp already has ten schedule points."), Toast.LENGTH_LONG).show();
+            return;
+        }
+        int minuteOfDay = nextAvailableScheduleTime();
+        int[] levels = {0, 0, 0, 0};
+        ArrayList<SchedulePoint> existing = editableSchedulePoints();
+        if (!existing.isEmpty()) {
+            Collections.sort(existing, (a, b) -> Integer.compare(a.hour * 60 + a.minute, b.hour * 60 + b.minute));
+            levels = existing.get(existing.size() - 1).levels.clone();
+        }
+        schedulePoints[slot] = new SchedulePoint(slot, minuteOfDay / 60, minuteOfDay % 60,
+                true, levels, false);
+        selectSchedulePoint(slot);
+        setStatus(tr("Novo horário adicionado à prévia. Ajuste e salve para enviá-lo à lâmpada.",
+                "New time added to the preview. Adjust it and save to send it to the lamp."));
+    }
+
+    private int nextAvailableScheduleTime() {
+        int candidate = editableSchedulePoints().isEmpty() ? 8 * 60 : 12 * 60;
+        for (int attempt = 0; attempt < 96; attempt++) {
+            int hour = (candidate / 60) % 24;
+            int minute = candidate % 60;
+            if (!hasScheduleConflict(-1, hour, minute)) return candidate;
+            candidate = (candidate + 15) % (24 * 60);
+        }
+        return 12 * 60;
+    }
+
+    private ArrayList<SchedulePoint> editableSchedulePoints() {
+        ArrayList<SchedulePoint> points = new ArrayList<>();
+        for (int i = 0; i < schedulePoints.length; i++) if (schedulePoints[i] != null) points.add(schedulePoints[i]);
+        return points;
     }
 
     private void addChannelControl(int index) {
@@ -399,7 +562,7 @@ public class MainActivity extends Activity {
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
         TextView name = new TextView(this);
-        name.setText(CHANNELS[index]);
+        name.setText(channelNames()[index]);
         name.setTextSize(15);
         name.setTextColor(Color.rgb(35, 54, 60));
         heading.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
@@ -433,7 +596,7 @@ public class MainActivity extends Activity {
         LinearLayout heading = new LinearLayout(this);
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        TextView name = helperText(CHANNELS[index]);
+        TextView name = helperText(channelNames()[index]);
         heading.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
         scheduleValues[index] = helperText("0%");
         heading.addView(scheduleValues[index]);
@@ -515,28 +678,30 @@ public class MainActivity extends Activity {
         loadingSchedulePoint = true;
         SchedulePoint point = schedulePoints[slot];
         if (point == null) {
-            scheduleHour = 12;
-            scheduleMinute = 0;
-            scheduleEnabledSwitch.setChecked(false);
-            for (SeekBar bar : scheduleBars) bar.setProgress(0);
-        } else {
-            scheduleHour = point.hour;
-            scheduleMinute = point.minute;
-            scheduleEnabledSwitch.setChecked(point.enabled);
-            for (int i = 0; i < scheduleBars.length; i++) scheduleBars[i].setProgress(point.levels[i]);
+            scheduleEditorPanel.setVisibility(android.view.View.GONE);
+            loadingSchedulePoint = false;
+            refreshScheduleTimeline(false);
+            return;
         }
-        scheduleEditTitleView.setText(point == null ? "Novo horário" : "Editar horário · "
-                + twoDigits(point.hour) + ":" + twoDigits(point.minute));
-        scheduleTimeButton.setText("Escolher horário · " + twoDigits(scheduleHour) + ":" + twoDigits(scheduleMinute));
+        scheduleEditorPanel.setVisibility(android.view.View.VISIBLE);
+        scheduleHour = point.hour;
+        scheduleMinute = point.minute;
+        scheduleEnabledSwitch.setChecked(point.enabled);
+        for (int i = 0; i < scheduleBars.length; i++) scheduleBars[i].setProgress(point.levels[i]);
+        scheduleEditTitleView.setText((point.saved ? tr("Editar ponto", "Edit point")
+                : tr("Novo ponto", "New point")) + " · " + twoDigits(point.hour) + ":" + twoDigits(point.minute));
+        scheduleTimeButton.setText(tr("Alterar horário · ", "Change time · ") + twoDigits(scheduleHour) + ":" + twoDigits(scheduleMinute));
         loadingSchedulePoint = false;
         updateConflictMessage(slot);
-        refreshScheduleSlotLabels();
+        refreshScheduleTimeline(false);
         if (lightGraph != null) lightGraph.invalidate();
     }
 
     private void selectSchedulePoint(int slot) {
         activeScheduleSlot = slot;
         loadSchedulePoint(slot);
+        refreshScheduleTimeline(true);
+        if (lightGraph != null) lightGraph.invalidate();
     }
 
     private void updateScheduleGraphPreview() {
@@ -544,15 +709,16 @@ public class MainActivity extends Activity {
         int slot = activeScheduleSlot;
         int[] levels = new int[scheduleBars.length];
         for (int i = 0; i < levels.length; i++) levels[i] = scheduleBars[i].getProgress();
+        SchedulePoint oldPoint = schedulePoints[slot];
         schedulePoints[slot] = new SchedulePoint(slot, scheduleHour, scheduleMinute,
-                scheduleEnabledSwitch.isChecked(), levels);
+                scheduleEnabledSwitch.isChecked(), levels, oldPoint != null && oldPoint.saved);
         updateConflictMessage(slot);
-        refreshScheduleSlotLabels();
+        refreshScheduleTimeline(true);
         lightGraph.invalidate();
     }
 
     private boolean hasScheduleConflict(int slot, int hour, int minute) {
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < schedulePoints.length; i++) {
             SchedulePoint other = schedulePoints[i];
             if (i != slot && other != null && other.enabled && other.hour == hour && other.minute == minute) return true;
         }
@@ -568,13 +734,14 @@ public class MainActivity extends Activity {
         boolean conflict = hasScheduleConflict(slot);
         scheduleConflictView.setVisibility(conflict ? android.view.View.VISIBLE : android.view.View.GONE);
         scheduleConflictView.setText(conflict
-                ? "Já existe outro ponto ativo neste horário. Escolha outro horário para evitar sobreposição."
+                ? tr("Já existe outro ponto ativo neste horário. Escolha outro horário para evitar sobreposição.",
+                "Another active point uses this time. Choose a different time to avoid overlap.")
                 : "");
     }
 
     private void startScanFlow() {
         if (bluetoothAdapter == null) {
-            setStatus("Este aparelho não oferece Bluetooth.");
+            setStatus(tr("Este aparelho não oferece Bluetooth.", "This device does not support Bluetooth."));
             return;
         }
         if (!hasBlePermissions()) {
@@ -582,13 +749,17 @@ public class MainActivity extends Activity {
             return;
         }
         if (!bluetoothAdapter.isEnabled()) {
-            setStatus("Ative o Bluetooth para pesquisar a lâmpada.");
-            startActivityForResult(new android.content.Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), REQUEST_ENABLE_BLUETOOTH);
+            setStatus(tr("Ative o Bluetooth para pesquisar a lâmpada.", "Turn on Bluetooth to search for the lamp."));
+            try {
+                startActivityForResult(new android.content.Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), REQUEST_ENABLE_BLUETOOTH);
+            } catch (SecurityException exception) {
+                requestBlePermissions();
+            }
             return;
         }
         scanner = bluetoothAdapter.getBluetoothLeScanner();
         if (scanner == null) {
-            setStatus("Não foi possível iniciar o scanner BLE.");
+            setStatus(tr("Não foi possível iniciar o scanner BLE.", "Could not start the BLE scanner."));
             return;
         }
         foundDevices.clear();
@@ -596,16 +767,16 @@ public class MainActivity extends Activity {
         devicesLabel.setVisibility(android.view.View.GONE);
         scanning = true;
         scanButton.setEnabled(false);
-        scanButton.setText("Buscando luminária…");
-        setStatus("Buscando dispositivos próximos por 12 segundos…");
+        scanButton.setText(tr("Buscando luminária…", "Searching for lamp…"));
+        setStatus(tr("Buscando dispositivos próximos por 12 segundos…", "Searching for nearby devices for 12 seconds…"));
         try {
             scanner.startScan(scanCallback);
             handler.postDelayed(this::stopScan, 12000);
         } catch (SecurityException exception) {
             scanning = false;
             scanButton.setEnabled(true);
-            scanButton.setText("Buscar luminária");
-            setStatus("Permissão Bluetooth não concedida.");
+            scanButton.setText(tr("Buscar luminária", "Search for lamp"));
+            setStatus(tr("Permissão Bluetooth não concedida.", "Bluetooth permission was not granted."));
         }
     }
 
@@ -630,8 +801,8 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 scanning = false;
                 scanButton.setEnabled(true);
-                scanButton.setText("Buscar luminária");
-                setStatus("A busca BLE falhou (código " + errorCode + "). Tente novamente.");
+                scanButton.setText(tr("Buscar luminária", "Search for lamp"));
+                setStatus(tr("A busca BLE falhou (código ", "BLE search failed (code ") + errorCode + tr("). Tente novamente.", "). Try again."));
             });
         }
     };
@@ -649,7 +820,7 @@ public class MainActivity extends Activity {
         deviceButton.setOnClickListener(v -> connect(device));
         devicesLabel.setVisibility(android.view.View.VISIBLE);
         devicesContainer.addView(deviceButton, topMargin(4));
-        setStatus("Encontrados: " + foundDevices.size() + ". Toque no dispositivo da lâmpada.");
+        setStatus(tr("Encontrados: ", "Found: ") + foundDevices.size() + tr(". Toque no dispositivo da lâmpada.", ". Tap the lamp device to connect."));
     }
 
     private void stopScan() {
@@ -659,9 +830,9 @@ public class MainActivity extends Activity {
             if (scanner != null && hasBlePermissions()) scanner.stopScan(scanCallback);
         } catch (SecurityException ignored) { }
         scanButton.setEnabled(true);
-        scanButton.setText("Buscar luminária");
-        if (foundDevices.isEmpty()) setStatus("Nenhuma luminária OceanTech encontrada. Procure um nome TO-L-XXXX e tente novamente.");
-        else setStatus("Busca concluída. Toque no dispositivo da lâmpada para conectar.");
+        scanButton.setText(tr("Buscar luminária", "Search for lamp"));
+        if (foundDevices.isEmpty()) setStatus(tr("Nenhuma luminária OceanTech encontrada. Procure um nome TO-L-XXXX e tente novamente.", "No OceanTech lamp found. Look for a TO-L-XXXX name and try again."));
+        else setStatus(tr("Busca concluída. Toque no dispositivo da lâmpada para conectar.", "Search complete. Tap the lamp device to connect."));
     }
 
     private void connect(BluetoothDevice device) {
@@ -673,7 +844,10 @@ public class MainActivity extends Activity {
         closeGatt();
         setConnectedContentVisible(false);
         scheduleDataLoaded = false;
+        activeScheduleSlot = -1;
         for (int i = 0; i < schedulePoints.length; i++) schedulePoints[i] = null;
+        if (scheduleTimeline != null) refreshScheduleTimeline(true);
+        if (scheduleEditorPanel != null) scheduleEditorPanel.setVisibility(android.view.View.GONE);
         alarmReadsCompleted = 0;
         connectedReady = false;
         modeKnown = false;
@@ -690,19 +864,25 @@ public class MainActivity extends Activity {
         pendingAutoMode = null;
         writeInFlight = false;
         writeQueue.clear();
-        setStatus("Conectando a " + device.getAddress() + "…");
+        setStatus(tr("Conectando a ", "Connecting to ") + device.getAddress() + "…");
         try {
             gatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
         } catch (SecurityException exception) {
-            setStatus("Sem permissão para conectar por Bluetooth.");
+            setStatus(tr("Sem permissão para conectar por Bluetooth.", "Bluetooth connection permission is missing."));
         }
     }
 
     private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt bluetoothGatt, int status, int newState) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                runOnUiThread(() -> setStatus("Conectado. Lendo serviços da lâmpada…"));
-                bluetoothGatt.discoverServices();
+                runOnUiThread(() -> setStatus(tr("Conectado. Lendo serviços da lâmpada…", "Connected. Reading lamp services…")));
+                try {
+                    if (!bluetoothGatt.discoverServices()) {
+                        runOnUiThread(() -> setStatus(tr("Não consegui iniciar a leitura dos serviços BLE.", "Could not start BLE service discovery.")));
+                    }
+                } catch (SecurityException exception) {
+                    runOnUiThread(() -> setStatus(tr("A permissão Bluetooth foi removida.", "Bluetooth permission was removed.")));
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 connectedReady = false;
                 modeKnown = false;
@@ -725,17 +905,17 @@ public class MainActivity extends Activity {
                     setScheduleControlsEnabled(false);
                     setConnectedContentVisible(false);
                     for (CheckBox day : weekDays) day.setEnabled(false);
-                    modeButton.setText("Modo da lâmpada: aguardando leitura");
-                    setStatus("Lâmpada desconectada.");
+                    modeButton.setText(tr("Modo da lâmpada: aguardando leitura", "Lamp mode: waiting for status"));
+                    setStatus(tr("Lâmpada desconectada.", "Lamp disconnected."));
                 });
                 if (gatt == bluetoothGatt) gatt = null;
-                bluetoothGatt.close();
+                try { bluetoothGatt.close(); } catch (SecurityException ignored) { }
             }
         }
 
         @Override public void onServicesDiscovered(BluetoothGatt bluetoothGatt, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                runOnUiThread(() -> setStatus("Não consegui ler os serviços BLE da lâmpada."));
+                runOnUiThread(() -> setStatus(tr("Não consegui ler os serviços BLE da lâmpada.", "Could not read the lamp BLE services.")));
                 return;
             }
             BluetoothGattService service = bluetoothGatt.getService(SERVICE_UUID);
@@ -744,7 +924,7 @@ public class MainActivity extends Activity {
             BluetoothGattCharacteristic week = service == null ? null : service.getCharacteristic(WEEK_UUID);
             BluetoothGattCharacteristic alarm = service == null ? null : service.getCharacteristic(ALARM_UUID);
             if (characteristic == null) {
-                runOnUiThread(() -> setStatus("A lâmpada não anunciou o serviço esperado (AE00/AE01)."));
+                runOnUiThread(() -> setStatus(tr("A lâmpada não anunciou o serviço esperado (AE00/AE01).", "The lamp did not advertise the expected service (AE00/AE01).")));
                 return;
             }
             writeCharacteristic = characteristic;
@@ -754,12 +934,12 @@ public class MainActivity extends Activity {
             alarmCharacteristic = alarm != null
                     && (alarm.getProperties() & BluetoothGattCharacteristic.PROPERTY_READ) != 0 ? alarm : null;
             if (state == null || (state.getProperties() & BluetoothGattCharacteristic.PROPERTY_READ) == 0) {
-                runOnUiThread(() -> setStatus("Conectou, mas a característica de estado AE10 não pode ser lida."));
+                runOnUiThread(() -> setStatus(tr("Conectou, mas a característica de estado AE10 não pode ser lida.", "Connected, but status characteristic AE10 could not be read.")));
                 return;
             }
             enqueueWrite(asciiFrame(HANDSHAKE, false));
             handshakeQueued = true;
-            runOnUiThread(() -> setStatus("Serviço encontrado. Confirmando protocolo…"));
+            runOnUiThread(() -> setStatus(tr("Serviço encontrado. Confirmando protocolo…", "Service found. Confirming protocol…")));
         }
 
         @Override public void onCharacteristicWrite(BluetoothGatt bluetoothGatt,
@@ -770,18 +950,22 @@ public class MainActivity extends Activity {
                 handshakeQueued = false;
                 connectedReady = true;
                 runOnUiThread(() -> {
-                    setStatus("Conectado. Lendo o modo e os níveis atuais…");
+                    setStatus(tr("Conectado. Lendo o modo e os níveis atuais…", "Connected. Reading the current mode and levels…"));
                 });
                 BluetoothGattCharacteristic state = stateCharacteristic;
-                if (state == null || !bluetoothGatt.readCharacteristic(state)) {
-                    runOnUiThread(() -> setStatus("Conectado, mas não consegui ler o estado inicial (AE10)."));
+                boolean readStarted = false;
+                try {
+                    readStarted = state != null && bluetoothGatt.readCharacteristic(state);
+                } catch (SecurityException ignored) { }
+                if (!readStarted) {
+                    runOnUiThread(() -> setStatus(tr("Conectado, mas não consegui ler o estado inicial (AE10).", "Connected, but could not read the initial status (AE10).")));
                 }
             } else if (status == BluetoothGatt.GATT_SUCCESS && pendingAutoMode != null) {
                 autoMode = pendingAutoMode;
                 pendingAutoMode = null;
                 runOnUiThread(() -> {
                     updateModeControls();
-                    setStatus(autoMode ? "Modo automático ativado." : "Modo manual ativado. Agora envie os níveis.");
+                    setStatus(autoMode ? tr("Modo automático ativado.", "Automatic mode enabled.") : tr("Modo manual ativado. Agora envie os níveis.", "Manual mode enabled. Send the levels now."));
                 });
             } else if (status == BluetoothGatt.GATT_SUCCESS && pendingPower != null) {
                 boolean on = pendingPower;
@@ -792,15 +976,15 @@ public class MainActivity extends Activity {
                 pendingPower = null;
                 runOnUiThread(() -> {
                     updateModeControls();
-                    powerButton.setText(on ? "Lâmpada ligada · toque para desligar" : "Lâmpada desligada · toque para ligar");
-                    setStatus(on ? "Lâmpada ligada." : "Lâmpada desligada.");
+                    powerButton.setText(on ? tr("Lâmpada ligada · toque para desligar", "Lamp on · tap to turn off") : tr("Lâmpada desligada · toque para ligar", "Lamp off · tap to turn on"));
+                    setStatus(on ? tr("Lâmpada ligada.", "Lamp turned on.") : tr("Lâmpada desligada.", "Lamp turned off."));
                 });
             } else if (status != BluetoothGatt.GATT_SUCCESS) {
                 pendingAutoMode = null;
                 pendingPower = null;
                 runOnUiThread(() -> {
                     updateModeControls();
-                    setStatus("Falha ao enviar dado BLE (" + status + ").");
+                    setStatus(tr("Falha ao enviar dado BLE (", "Failed to send BLE data (") + status + ").");
                 });
             }
             writeNext();
@@ -831,14 +1015,14 @@ public class MainActivity extends Activity {
 
     private void handleStateRead(byte[] value, int status) {
         if (status != BluetoothGatt.GATT_SUCCESS || value == null || value.length < 12) {
-            runOnUiThread(() -> setStatus("Conectado, mas a lâmpada não retornou o estado inicial."));
+            runOnUiThread(() -> setStatus(tr("Conectado, mas a lâmpada não retornou o estado inicial.", "Connected, but the lamp did not return its initial status.")));
             return;
         }
         StringBuilder hex = new StringBuilder(value.length * 2);
         for (byte item : value) hex.append(String.format(Locale.US, "%02x", item & 0xff));
         String state = hex.toString();
         if (state.length() < 24 || state.charAt(1) != '6') {
-            runOnUiThread(() -> setStatus("Resposta BLE inesperada. Não vou enviar níveis até conseguir identificar o estado."));
+            runOnUiThread(() -> setStatus(tr("Resposta BLE inesperada. Não vou enviar níveis até conseguir identificar o estado.", "Unexpected BLE response. Levels will not be sent until the lamp status is identified.")));
             return;
         }
         modeHeader = state.substring(0, 10);
@@ -861,13 +1045,14 @@ public class MainActivity extends Activity {
             updateModeControls();
             setConnectedContentVisible(true);
             powerButton.setText(lampOn
-                    ? "Lâmpada ligada · toque para desligar" : "Lâmpada desligada · toque para ligar");
+                    ? tr("Lâmpada ligada · toque para desligar", "Lamp on · tap to turn off")
+                    : tr("Lâmpada desligada · toque para ligar", "Lamp off · tap to turn on"));
             powerButton.setEnabled(connectedReady);
             saveWeekButton.setEnabled(false);
             clockButton.setEnabled(connectedReady);
             setScheduleControlsEnabled(connectedReady);
             for (CheckBox day : weekDays) day.setEnabled(false);
-            setStatus("Estado lido da lâmpada. Lendo repetição semanal…");
+            setStatus(tr("Estado lido da lâmpada. Lendo repetição semanal…", "Lamp status read. Reading weekly repeat…"));
         });
         BluetoothGattCharacteristic week = weekCharacteristic;
         BluetoothGatt currentGatt = gatt;
@@ -902,7 +1087,7 @@ public class MainActivity extends Activity {
                 weekDays[i].setEnabled(connectedReady);
             }
             saveWeekButton.setEnabled(connectedReady);
-            setStatus("Estado e repetição semanal lidos da lâmpada.");
+            setStatus(tr("Estado e repetição semanal lidos da lâmpada.", "Lamp status and weekly repeat read."));
         });
         beginAlarmReads();
     }
@@ -950,7 +1135,7 @@ public class MainActivity extends Activity {
                             levels[i] = Math.min(100, Integer.parseInt(record.substring(8 + i * 2, 10 + i * 2), 16));
                         }
                         boolean enabled = "1e".equals(record.substring(2, 4));
-                        schedulePoints[slot] = new SchedulePoint(slot, hour, minute, enabled, levels);
+                        schedulePoints[slot] = new SchedulePoint(slot, hour, minute, enabled, levels, true);
                     } catch (NumberFormatException ignored) { }
                 }
             }
@@ -964,52 +1149,33 @@ public class MainActivity extends Activity {
         scheduleDataLoaded = true;
         runOnUiThread(() -> {
             if (lightGraph != null) lightGraph.invalidate();
-            refreshScheduleSlotLabels();
+            if (activeScheduleSlot < 0 || activeScheduleSlot >= 8 || schedulePoints[activeScheduleSlot] == null) {
+                activeScheduleSlot = firstSchedulePointByTime();
+            }
+            refreshScheduleTimeline(true);
             setScheduleControlsEnabled(connectedReady);
-            loadSchedulePoint(activeScheduleSlot);
-            setStatus("Programação carregada. Escolha um ponto da lista ou toque no gráfico para editar.");
+            if (activeScheduleSlot >= 0) loadSchedulePoint(activeScheduleSlot);
+            else scheduleEditorPanel.setVisibility(android.view.View.GONE);
+            setStatus(tr("Programação carregada. Toque em um horário para editar ou adicione um novo.",
+                    "Schedule loaded. Tap a time to edit it or add a new one."));
         });
     }
 
-    private void refreshScheduleSlotLabels() {
-        if (scheduleSpinner == null || scheduleAdapter == null) return;
-        refreshingScheduleOptions = true;
-        scheduleAdapter.clear();
-        ArrayList<Integer> orderedSlots = new ArrayList<>();
-        for (int i = 0; i < 8; i++) if (schedulePoints[i] != null) orderedSlots.add(i);
-        Collections.sort(orderedSlots, (a, b) -> {
-            SchedulePoint first = schedulePoints[a];
-            SchedulePoint second = schedulePoints[b];
-            return Integer.compare(first.hour * 60 + first.minute, second.hour * 60 + second.minute);
-        });
-        for (int i = 0; i < 8; i++) if (schedulePoints[i] == null) orderedSlots.add(i);
-        int chronologicalNumber = 0;
-        int newPointNumber = 0;
-        for (int i = 0; i < orderedSlots.size(); i++) {
-            int slot = orderedSlots.get(i);
-            scheduleSpinnerSlots[i] = slot;
-            SchedulePoint point = schedulePoints[slot];
-            String label;
-            if (point == null) {
-                label = "Adicionar novo horário" + (++newPointNumber > 1 ? " " + newPointNumber : "");
-            } else {
-                label = "Horário " + (++chronologicalNumber) + "  ·  "
-                        + twoDigits(point.hour) + ":" + twoDigits(point.minute)
-                        + (point.enabled ? "  ·  Ativo" : "  ·  Desativado");
-                if (point.enabled && hasScheduleConflict(slot)) label += "  ·  Revisar horário";
-            }
-            scheduleAdapter.add(label);
+    private int firstSchedulePointByTime() {
+        int selected = -1;
+        for (int i = 0; i < schedulePoints.length; i++) {
+            if (schedulePoints[i] == null) continue;
+            if (selected < 0 || schedulePoints[i].hour * 60 + schedulePoints[i].minute
+                    < schedulePoints[selected].hour * 60 + schedulePoints[selected].minute) selected = i;
         }
-        scheduleAdapter.notifyDataSetChanged();
-        int selectedPosition = 0;
-        for (int i = 0; i < 8; i++) if (scheduleSpinnerSlots[i] == activeScheduleSlot) selectedPosition = i;
-        scheduleSpinner.setSelection(selectedPosition, false);
-        refreshingScheduleOptions = false;
+        return selected;
     }
+
+    private void refreshScheduleSlotLabels() { refreshScheduleTimeline(true); }
 
     private void toggleMode() {
         if (!connectedReady || !modeKnown || modeHeader == null) {
-            setStatus("Ainda não consegui ler o estado da lâmpada.");
+            setStatus(tr("Ainda não consegui ler o estado da lâmpada.", "Could not read the lamp status yet."));
             return;
         }
         boolean nextAutoMode = !autoMode;
@@ -1018,12 +1184,12 @@ public class MainActivity extends Activity {
         pendingAutoMode = nextAutoMode;
         modeButton.setEnabled(false);
         enqueueWrite(asciiFrame(command, true));
-        setStatus(nextAutoMode ? "Enviando comando para ativar modo automático…" : "Enviando comando para ativar modo manual…");
+        setStatus(nextAutoMode ? tr("Enviando comando para ativar modo automático…", "Sending command to enable automatic mode…") : tr("Enviando comando para ativar modo manual…", "Sending command to enable manual mode…"));
     }
 
     private void togglePower() {
         if (!connectedReady || !modeKnown || modeHeader == null) {
-            setStatus("Ainda não consegui ler o estado da lâmpada.");
+            setStatus(tr("Ainda não consegui ler o estado da lâmpada.", "Could not read the lamp status yet."));
             return;
         }
         boolean nextOn = !lampOn;
@@ -1032,12 +1198,12 @@ public class MainActivity extends Activity {
         pendingPower = nextOn;
         powerButton.setEnabled(false);
         enqueueWrite(asciiFrame(command, true));
-        setStatus(nextOn ? "Enviando comando para ligar…" : "Enviando comando para desligar…");
+        setStatus(nextOn ? tr("Enviando comando para ligar…", "Sending command to turn on…") : tr("Enviando comando para desligar…", "Sending command to turn off…"));
     }
 
     private void saveWeekDays() {
         if (!connectedReady || weekCharacteristic == null) {
-            setStatus("A lâmpada não disponibiliza a configuração semanal.");
+            setStatus(tr("A lâmpada não disponibiliza a configuração semanal.", "This lamp does not provide weekly scheduling."));
             return;
         }
         StringBuilder command = new StringBuilder("app_week_data");
@@ -1045,12 +1211,12 @@ public class MainActivity extends Activity {
         enqueueWrite(asciiFrame(command.toString(), true));
         // The original app applies its weekly timer frequency after saving the seven flags.
         enqueueWrite(asciiFrame("app_set_pwm_fre750", true));
-        setStatus("Dias da semana e frequência enviados à lâmpada.");
+        setStatus(tr("Dias da semana e frequência enviados à lâmpada.", "Weekdays and frequency sent to the lamp."));
     }
 
     private void syncLampClock() {
         if (!connectedReady) {
-            setStatus("Conecte à lâmpada antes de sincronizar o relógio.");
+            setStatus(tr("Conecte à lâmpada antes de sincronizar o relógio.", "Connect to the lamp before syncing its clock."));
             return;
         }
         Calendar now = Calendar.getInstance();
@@ -1066,28 +1232,30 @@ public class MainActivity extends Activity {
         String command = "RTCSET" + year + twoDigits(month) + "0" + weekday
                 + twoDigits(dayOfMonth) + twoDigits(hour) + twoDigits(minute) + secondField;
         enqueueWrite(asciiFrame(command, true));
-        setStatus("Relógio do telefone enviado à lâmpada.");
+        setStatus(tr("Relógio do telefone enviado à lâmpada.", "Phone clock sent to the lamp."));
     }
 
     private void chooseScheduleTime() {
         new TimePickerDialog(this, (view, hour, minute) -> {
             scheduleHour = hour;
             scheduleMinute = minute;
-            scheduleEditTitleView.setText("Editar horário · " + twoDigits(hour) + ":" + twoDigits(minute));
-            scheduleTimeButton.setText("Escolher horário · " + twoDigits(hour) + ":" + twoDigits(minute));
+            SchedulePoint current = schedulePoints[activeScheduleSlot];
+            scheduleEditTitleView.setText((current != null && current.saved ? tr("Editar ponto", "Edit point")
+                    : tr("Novo ponto", "New point")) + " · " + twoDigits(hour) + ":" + twoDigits(minute));
+            scheduleTimeButton.setText(tr("Alterar horário · ", "Change time · ") + twoDigits(hour) + ":" + twoDigits(minute));
             updateScheduleGraphPreview();
         }, scheduleHour, scheduleMinute, true).show();
     }
 
     private void saveSchedule() {
         if (!connectedReady) {
-            setStatus("Conecte à lâmpada antes de salvar um horário.");
+            setStatus(tr("Conecte à lâmpada antes de salvar um horário.", "Connect to the lamp before saving a time."));
             return;
         }
         int slot = activeScheduleSlot;
         if (scheduleEnabledSwitch.isChecked() && hasScheduleConflict(slot, scheduleHour, scheduleMinute)) {
-            setStatus("Esse horário já está usado por outro ponto ativo. Escolha outro minuto antes de salvar.");
-            Toast.makeText(this, "Horário repetido: cada ponto ativo precisa de um horário diferente.", Toast.LENGTH_LONG).show();
+            setStatus(tr("Esse horário já está usado por outro ponto ativo. Escolha outro minuto antes de salvar.", "Another active point already uses this time. Choose a different minute before saving."));
+            Toast.makeText(this, tr("Horário repetido: cada ponto ativo precisa de um horário diferente.", "Duplicate time: each active point needs a different time."), Toast.LENGTH_LONG).show();
             return;
         }
         String enabled = scheduleEnabledSwitch.isChecked() ? "30" : "00";
@@ -1099,11 +1267,12 @@ public class MainActivity extends Activity {
             command.append(twoDigitsHex(levels[i]));
         }
         schedulePoints[slot] = new SchedulePoint(slot, scheduleHour, scheduleMinute,
-                scheduleEnabledSwitch.isChecked(), levels);
-        refreshScheduleSlotLabels();
+                scheduleEnabledSwitch.isChecked(), levels, true);
+        loadSchedulePoint(slot);
+        refreshScheduleTimeline(true);
         if (lightGraph != null) lightGraph.invalidate();
         enqueueWrite(asciiFrame(command.toString(), true));
-        setStatus("Horário " + (slot + 1) + " salvo com as cores e intensidades escolhidas.");
+        setStatus(tr("Horário salvo com as intensidades escolhidas.", "Schedule point saved with the selected light levels."));
     }
 
     private String twoDigitsHex(int value) {
@@ -1111,8 +1280,9 @@ public class MainActivity extends Activity {
     }
 
     private void setScheduleControlsEnabled(boolean enabled) {
-        boolean canEdit = enabled && scheduleDataLoaded;
-        if (scheduleSpinner != null) scheduleSpinner.setEnabled(canEdit);
+        boolean canEdit = enabled && scheduleDataLoaded && activeScheduleSlot >= 0;
+        boolean canAdd = enabled && scheduleDataLoaded && editableSchedulePoints().size() < schedulePoints.length;
+        if (addScheduleButton != null) addScheduleButton.setEnabled(canAdd);
         if (scheduleTimeButton != null) scheduleTimeButton.setEnabled(canEdit);
         if (scheduleEnabledSwitch != null) scheduleEnabledSwitch.setEnabled(canEdit);
         for (SeekBar bar : scheduleBars) if (bar != null) bar.setEnabled(canEdit);
@@ -1125,12 +1295,12 @@ public class MainActivity extends Activity {
 
     private void updateModeControls() {
         if (modeKnown) {
-            modeButton.setText(autoMode ? "Modo atual: automático · toque para manual" : "Modo atual: manual · toque para automático");
+            modeButton.setText(autoMode ? tr("Modo atual: automático · toque para manual", "Current mode: automatic · tap for manual") : tr("Modo atual: manual · toque para automático", "Current mode: manual · tap for automatic"));
             modeButton.setEnabled(connectedReady);
             powerButton.setEnabled(connectedReady && pendingPower == null);
             sendButton.setEnabled(connectedReady && !autoMode);
         } else {
-            modeButton.setText("Modo da lâmpada: aguardando leitura");
+            modeButton.setText(tr("Modo da lâmpada: aguardando leitura", "Lamp mode: waiting for status"));
             modeButton.setEnabled(false);
             powerButton.setEnabled(false);
             sendButton.setEnabled(false);
@@ -1139,17 +1309,17 @@ public class MainActivity extends Activity {
 
     private void sendChannelLevels() {
         if (!connectedReady || !modeKnown) {
-            Toast.makeText(this, "Conecte à lâmpada e aguarde a leitura do estado.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("Conecte à lâmpada e aguarde a leitura do estado.", "Connect to the lamp and wait for its status to load."), Toast.LENGTH_SHORT).show();
             return;
         }
         if (autoMode) {
-            Toast.makeText(this, "Mude para o modo manual antes de enviar os níveis.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, tr("Mude para o modo manual antes de enviar os níveis.", "Switch to manual mode before sending levels."), Toast.LENGTH_SHORT).show();
             return;
         }
         StringBuilder command = new StringBuilder("rtvall00");
         for (SeekBar bar : channelBars) command.append(String.format(Locale.US, "%03d", bar.getProgress()));
         enqueueWrite(asciiFrame(command.toString(), true));
-        setStatus("Comando enviado: W/B/G/R " + channelBars[0].getProgress() + "/"
+        setStatus(tr("Comando enviado: W/B/G/R ", "Command sent: W/B/G/R ") + channelBars[0].getProgress() + "/"
                 + channelBars[1].getProgress() + "/" + channelBars[2].getProgress() + "/"
                 + channelBars[3].getProgress() + ".");
     }
@@ -1180,19 +1350,19 @@ public class MainActivity extends Activity {
                 int result = gatt.writeCharacteristic(writeCharacteristic, next, writeType);
                 if (result != BluetoothStatusCodes.SUCCESS) {
                     writeInFlight = false;
-                    runOnUiThread(() -> setStatus("O Android recusou o comando BLE (" + result + ")."));
+                    runOnUiThread(() -> setStatus(tr("O Android recusou o comando BLE (", "Android rejected the BLE command (") + result + ")."));
                 }
             } else {
                 writeCharacteristic.setWriteType(writeType);
                 writeCharacteristic.setValue(next);
                 if (!gatt.writeCharacteristic(writeCharacteristic)) {
                     writeInFlight = false;
-                    runOnUiThread(() -> setStatus("O Android não iniciou o envio BLE."));
+                    runOnUiThread(() -> setStatus(tr("O Android não iniciou o envio BLE.", "Android did not start the BLE write.")));
                 }
             }
         } catch (SecurityException exception) {
             writeInFlight = false;
-            runOnUiThread(() -> setStatus("Sem permissão para escrever na lâmpada."));
+            runOnUiThread(() -> setStatus(tr("Sem permissão para escrever na lâmpada.", "Permission to write to the lamp is missing.")));
         }
     }
 
@@ -1209,9 +1379,9 @@ public class MainActivity extends Activity {
         clockButton.setEnabled(false);
         setScheduleControlsEnabled(false);
         for (CheckBox day : weekDays) day.setEnabled(false);
-        modeButton.setText("Modo da lâmpada: aguardando leitura");
+        modeButton.setText(tr("Modo da lâmpada: aguardando leitura", "Lamp mode: waiting for status"));
         closeGatt();
-        setStatus("Desconectado.");
+        setStatus(tr("Desconectado.", "Disconnected."));
     }
 
     private void closeGatt() {
@@ -1224,8 +1394,10 @@ public class MainActivity extends Activity {
         writeQueue.clear();
         writeInFlight = false;
         if (oldGatt != null) {
-            try { oldGatt.disconnect(); } catch (SecurityException ignored) { }
-            oldGatt.close();
+            try {
+                oldGatt.disconnect();
+                oldGatt.close();
+            } catch (SecurityException ignored) { }
         }
     }
 
@@ -1234,16 +1406,14 @@ public class MainActivity extends Activity {
             return checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
                     && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
         }
-        return Build.VERSION.SDK_INT >= 23
-                ? checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                : true;
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void requestBlePermissions() {
         if (Build.VERSION.SDK_INT >= 31) {
             requestPermissions(new String[]{Manifest.permission.BLUETOOTH_SCAN,
                     Manifest.permission.BLUETOOTH_CONNECT}, REQUEST_BLE_PERMISSIONS);
-        } else if (Build.VERSION.SDK_INT >= 23) {
+        } else {
             requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, REQUEST_BLE_PERMISSIONS);
         }
     }
@@ -1254,7 +1424,7 @@ public class MainActivity extends Activity {
             boolean granted = grantResults.length > 0;
             for (int result : grantResults) granted &= result == PackageManager.PERMISSION_GRANTED;
             if (granted) startScanFlow();
-            else setStatus("Permita dispositivos próximos/Bluetooth para buscar a lâmpada.");
+            else setStatus(tr("Permita dispositivos próximos/Bluetooth para buscar a lâmpada.", "Allow Nearby Devices/Bluetooth permission to search for the lamp."));
         }
     }
 
@@ -1271,9 +1441,11 @@ public class MainActivity extends Activity {
 
     private final class LightGraphView extends android.view.View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
         private final int[] lineColors = {Color.rgb(111, 119, 124), Color.rgb(48, 105, 206),
                 Color.rgb(40, 157, 112), Color.rgb(218, 82, 75)};
-        private final String[] lineNames = {"Branco", "Azul", "Verde", "Vermelho"};
+        private final String[] lineNames = channelNames();
+        private final String[] hourLabels = {"00", "06", "12", "18", "24"};
 
         LightGraphView(Context context) {
             super(context);
@@ -1308,7 +1480,10 @@ public class MainActivity extends Activity {
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setColor(Color.rgb(226, 233, 234));
             }
-            String[] hourLabels = {"00", "06", "12", "18", "24"};
+            for (int hour = 0; hour <= 24; hour += 6) {
+                float x = left + (right - left) * hour / 24f;
+                canvas.drawLine(x, top, x, bottom, paint);
+            }
             paint.setStyle(Paint.Style.FILL);
             paint.setTextSize(dp(10));
             paint.setColor(Color.rgb(112, 127, 130));
@@ -1322,13 +1497,14 @@ public class MainActivity extends Activity {
             if (points.isEmpty()) {
                 paint.setColor(Color.rgb(125, 139, 142));
                 paint.setTextSize(dp(12));
-                canvas.drawText("Adicione um horário para ver a curva de luz", left + dp(4),
+                canvas.drawText(tr("Adicione um horário para ver a curva de luz",
+                                "Add a time point to preview the light curve"), left + dp(4),
                         (top + bottom) / 2f, paint);
                 return;
             }
             Collections.sort(points, (a, b) -> Integer.compare(a.hour * 60 + a.minute, b.hour * 60 + b.minute));
             for (int channel = 0; channel < 4; channel++) {
-                Path path = new Path();
+                path.reset();
                 for (int i = 0; i < points.size(); i++) {
                     SchedulePoint point = points.get(i);
                     float x = timeX(point, left, right);
@@ -1343,8 +1519,19 @@ public class MainActivity extends Activity {
                 canvas.drawPath(path, paint);
                 paint.setStyle(Paint.Style.FILL);
                 for (SchedulePoint point : points) {
-                    canvas.drawCircle(timeX(point, left, right), levelY(point.levels[channel], top, bottom),
-                            dp(3), paint);
+                    float x = timeX(point, left, right);
+                    float y = levelY(point.levels[channel], top, bottom);
+                    if (point.slot == activeScheduleSlot) {
+                        paint.setColor(Color.WHITE);
+                        canvas.drawCircle(x, y, dp(6), paint);
+                        paint.setStyle(Paint.Style.STROKE);
+                        paint.setStrokeWidth(dp(1.5f));
+                        paint.setColor(lineColors[channel]);
+                        canvas.drawCircle(x, y, dp(5), paint);
+                        paint.setStyle(Paint.Style.FILL);
+                    }
+                    paint.setColor(lineColors[channel]);
+                    canvas.drawCircle(x, y, dp(point.slot == activeScheduleSlot ? 3 : 2.5f), paint);
                 }
             }
         }
@@ -1364,7 +1551,7 @@ public class MainActivity extends Activity {
                 }
             }
             if (selectedSlot >= 0) {
-                if (selectedSlot < 8) {
+                if (selectedSlot < schedulePoints.length) {
                     showProgrammingTab(true);
                     selectSchedulePoint(selectedSlot);
                     performClick();
@@ -1388,6 +1575,44 @@ public class MainActivity extends Activity {
         }
     }
 
+    private final class MiniLevelsView extends android.view.View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int[] colors = {Color.rgb(111, 119, 124), Color.rgb(48, 105, 206),
+                Color.rgb(40, 157, 112), Color.rgb(218, 82, 75)};
+        private final String[] initials = appLanguage.equals("en")
+                ? new String[]{"W", "B", "G", "R"} : new String[]{"B", "A", "V", "Vm"};
+        private int[] levels = {0, 0, 0, 0};
+
+        MiniLevelsView(Context context) { super(context); }
+
+        void setLevels(int[] values) {
+            levels = values.clone();
+            invalidate();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float rowHeight = getHeight() / 4f;
+            paint.setTextSize(dp(9));
+            for (int i = 0; i < 4; i++) {
+                float centerY = rowHeight * i + rowHeight / 2f;
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(colors[i]);
+                canvas.drawText(initials[i], 0, centerY + dp(3), paint);
+                float left = dp(23), right = getWidth() - dp(31);
+                float barTop = centerY - dp(3), barBottom = centerY + dp(3);
+                paint.setColor(Color.rgb(229, 235, 236));
+                canvas.drawRoundRect(left, barTop, right, barBottom, dp(3), dp(3), paint);
+                paint.setColor(colors[i]);
+                float fillRight = left + Math.max(dp(2), (right - left) * levels[i] / 100f);
+                canvas.drawRoundRect(left, barTop, Math.min(right, fillRight), barBottom,
+                        dp(3), dp(3), paint);
+                paint.setColor(Color.rgb(84, 101, 105));
+                canvas.drawText(levels[i] + "%", getWidth() - dp(28), centerY + dp(3), paint);
+            }
+        }
+    }
+
     private ArrayList<SchedulePoint> activeSchedulePoints() {
         ArrayList<SchedulePoint> points = new ArrayList<>();
         for (SchedulePoint point : schedulePoints) if (point != null && point.enabled) points.add(point);
@@ -1400,23 +1625,28 @@ public class MainActivity extends Activity {
         final int minute;
         final boolean enabled;
         final int[] levels;
+        final boolean saved;
 
-        SchedulePoint(int slot, int hour, int minute, boolean enabled, int[] levels) {
+        SchedulePoint(int slot, int hour, int minute, boolean enabled, int[] levels, boolean saved) {
             this.slot = slot;
             this.hour = hour;
             this.minute = minute;
             this.enabled = enabled;
             this.levels = levels.clone();
+            this.saved = saved;
         }
     }
 
     private void setStatus(String text) {
         if (statusView == null) return;
         statusView.setText(text);
-        boolean problem = text.contains("Falha") || text.contains("não consegui")
-                || text.contains("não foi possível") || text.contains("Sem permissão");
+        boolean problem = text.contains("Falha") || text.contains("failed")
+                || text.contains("não consegui") || text.contains("could not")
+                || text.contains("não foi possível") || text.contains("Unable")
+                || text.contains("Sem permissão") || text.contains("permission");
         int background = problem ? Color.rgb(252, 236, 232)
-                : text.startsWith("Conectado") || text.startsWith("Estado lido")
+                : text.startsWith("Conectado") || text.startsWith("Connected")
+                || text.startsWith("Estado lido") || text.startsWith("Status read")
                 ? Color.rgb(232, 244, 241) : Color.rgb(236, 243, 245);
         int foreground = problem ? Color.rgb(145, 57, 43) : Color.rgb(35, 77, 78);
         statusView.setTextColor(foreground);
